@@ -1,0 +1,16 @@
+# Ignore the Python virtual environment
+deepfake/
+
+# Ignore all data folders
+data/
+
+# Ignore all Python cache
+__pycache__/
+*.pyc
+
+# Ignore all trained model files
+*.pth
+
+# Ignore all generated audio/output files
+*.wav
+*.flac
