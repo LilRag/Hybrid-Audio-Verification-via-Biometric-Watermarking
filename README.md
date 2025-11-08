@@ -90,18 +90,19 @@ pip install -r requirements.txt
 
 This project requires the LibriSpeech and MUSAN datasets.
 They must be placed in a data/ folder inside the LibriSpeech_trainer directory.
-LibriSpeech_trainer/
-├── data/
-│   ├── LibriSpeech/
-│   │   ├── train-clean-100/
-│   │   └── test-clean/
-│   └── musan/
-│       ├── music/
-│       ├── noise/
-│       └── speech/
-├── train.py
-└── ...
-
+└── LibriSpeech_trainer/
+    ├── __pycache__/
+    │   └── ... (Python cache files)
+    ├── data/
+    │   ├── LibriSpeech/
+    │   │   ├── dev-clean/
+    │   │   ├── test-clean/
+    │   │   ├── train-clean-100/
+    │   └── musan/
+    │       ├── music/
+    │       ├── noise/
+    │       ├── speech/
+    ├── train.py
 
 Dataset Sources
 
@@ -163,11 +164,29 @@ python verify_audio.py sealed_file.wav
 ```
 
 
-### Conceptual Flow
-[Clean Audio] 
-      ↓
-[Speaker Encoder] → Voice Hash → [Generator] → [Watermarked Audio]
-      ↓                                   ↓
-   [Verification Mode] ← Extractor ← [Suspect File]
+### Workflow 
+
+Enrollment
+graph TD
+    A[Clean Audio File] --> B[Speaker Encoder];
+    B --> C[Voiceprint Hash (64-bit)];
+    A --> D[Generator];
+    C --> D[Generator];
+    D --> E[Sealed Audio File (.wav)];
+
+Verification
+graph TD
+    A[Suspect Audio File] --> B[Discriminator];
+    B -- High Score (Clean) --> C[🔴 UNVERIFIED (Untrusted Source)];
+    B -- Low Score (Watermarked) --> D{Checkpoint 2: Verify Hash};
+    D --> E[Extractor];
+    D --> F[Speaker Encoder];
+    E --> G[Original Hash (from watermark)];
+    F --> H[Current Hash (from voice)];
+    G --> I[Compare Hashes];
+    H --> I[Compare Hashes];
+    I -- Hashes Match --> J[✅ VERIFIED];
+    I -- No Match --> K[❌ TAMPERED (Voice Altered)];
+
 
 
