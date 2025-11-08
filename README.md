@@ -165,15 +165,14 @@ python verify_audio.py sealed_file.wav
 
 
 ### Workflow 
-####Enrollment Workflow (Creating a "Sealed" File)
+#### Enrollment Workflow (Creating a "Sealed" File)
 A Clean Audio File is provided as input.
 The audio is fed into the Speaker Encoder to generate a unique Voiceprint Hash.
 The same Clean Audio File is also fed into the Generator.
 The Voiceprint Hash is also fed into the Generator.
 The Generator combines the audio and hash to produce the final Sealed Audio File.
 
-
-####Verification Workflow (Checking a "Suspect" File)
+#### Verification Workflow (Checking a "Suspect" File)
 A Suspect Audio File is provided as input.
 It's first fed into the Discriminator for a "bouncer" check.
 If the Discriminator gives a High Score: The file is clean (unwatermarked).
