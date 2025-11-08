@@ -165,28 +165,29 @@ python verify_audio.py sealed_file.wav
 
 
 ### Workflow 
+####Enrollment Workflow (Creating a "Sealed" File)
+A Clean Audio File is provided as input.
+The audio is fed into the Speaker Encoder to generate a unique Voiceprint Hash.
+The same Clean Audio File is also fed into the Generator.
+The Voiceprint Hash is also fed into the Generator.
+The Generator combines the audio and hash to produce the final Sealed Audio File.
 
-Enrollment
-graph TD
-    A[Clean Audio File] --> B[Speaker Encoder];
-    B --> C[Voiceprint Hash (64-bit)];
-    A --> D[Generator];
-    C --> D[Generator];
-    D --> E[Sealed Audio File (.wav)];
 
-Verification
-graph TD
-    A[Suspect Audio File] --> B[Discriminator];
-    B -- High Score (Clean) --> C[🔴 UNVERIFIED (Untrusted Source)];
-    B -- Low Score (Watermarked) --> D{Checkpoint 2: Verify Hash};
-    D --> E[Extractor];
-    D --> F[Speaker Encoder];
-    E --> G[Original Hash (from watermark)];
-    F --> H[Current Hash (from voice)];
-    G --> I[Compare Hashes];
-    H --> I[Compare Hashes];
-    I -- Hashes Match --> J[✅ VERIFIED];
-    I -- No Match --> K[❌ TAMPERED (Voice Altered)];
-
+####Verification Workflow (Checking a "Suspect" File)
+A Suspect Audio File is provided as input.
+It's first fed into the Discriminator for a "bouncer" check.
+If the Discriminator gives a High Score: The file is clean (unwatermarked).
+Result: 🔴 UNVERIFIED (Untrusted Source). The process stops.
+If the Discriminator gives a Low Score: The file is watermarked and proceeds to Checkpoint 2.
+At Checkpoint 2, the file is sent down two paths:
+Path A: The file goes to the Extractor to read the watermark.
+Output: Original Hash (from watermark)
+Path B: The file goes to the Speaker Encoder to analyze the voice.
+Output: Current Hash (from voice)
+The Original Hash and Current Hash are compared.
+If the Hashes Match:
+Result: ✅ VERIFIED
+If the Hashes Do Not Match:
+Result: ❌ TAMPERED (Voice Altered)
 
 
