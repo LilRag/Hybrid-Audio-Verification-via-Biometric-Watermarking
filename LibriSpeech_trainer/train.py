@@ -94,7 +94,7 @@ if __name__ == "__main__":
     # --- Config ---
     DATA_DIR = "data/LibriSpeech/train-clean-100"
     BATCH_SIZE = 32
-    NUM_EPOCHS = 25
+    NUM_EPOCHS = 40
     LEARNING_RATE = 0.001
     
     # Check for GPU
