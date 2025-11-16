@@ -15,7 +15,7 @@ from gan_models import Generator, Extractor, Discriminator
 LIBRI_DIR = "data/LibriSpeech/train-clean-100"
 MUSAN_DIR = "data/musan"
 BATCH_SIZE = 32
-NUM_EPOCHS = 25
+NUM_EPOCHS = 40
 LEARNING_RATE = 0.0001
 MESSAGE_BITS = 64
 AUDIO_CLIP_LEN_SEC = 1 # We will train on 1-second clips
