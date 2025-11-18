@@ -88,8 +88,10 @@ pip install -r requirements.txt
 
 ### Download Datasets 
 
+
 This project requires the LibriSpeech and MUSAN datasets.
 They must be placed in a data/ folder inside the LibriSpeech_trainer directory.
+```plaintext
 └── LibriSpeech_trainer/
     ├── __pycache__/
     │   └── ... (Python cache files)
@@ -103,13 +105,15 @@ They must be placed in a data/ folder inside the LibriSpeech_trainer directory.
     │       ├── noise/
     │       ├── speech/
     ├── train.py
-
+```
 Dataset Sources
 
 LibriSpeech: OpenSLR SLR12
+https://www.openslr.org/12
  → Download train-clean-100.tar.gz and test-clean.tar.gz
 
-MUSAN: OpenSLR SLR17
+MUSAN: OpenSLR SLR17 
+https://www.openslr.org/12
  → Download musan.tar.gz
 
 ### Training the Models
