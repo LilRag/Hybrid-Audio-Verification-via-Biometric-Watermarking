@@ -109,6 +109,7 @@ They must be placed in a data/ folder inside the LibriSpeech_trainer directory.
 Dataset Sources
 
 LibriSpeech: OpenSLR SLR12
+https://www.openslr.org/12
  → Download train-clean-100.tar.gz and test-clean.tar.gz
 
 MUSAN: OpenSLR SLR17
