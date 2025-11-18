@@ -112,7 +112,8 @@ LibriSpeech: OpenSLR SLR12
 https://www.openslr.org/12
  → Download train-clean-100.tar.gz and test-clean.tar.gz
 
-MUSAN: OpenSLR SLR17
+MUSAN: OpenSLR SLR17 
+https://www.openslr.org/12
  → Download musan.tar.gz
 
 ### Training the Models
