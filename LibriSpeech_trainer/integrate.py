@@ -18,8 +18,8 @@ MODEL_GENERATOR = "generator.pth"
 MODEL_EXTRACTOR = "extractor.pth"
 
 # Use the 'test-clean' set to find a file
-TEST_AUDIO_DIR = "data/LibriSpeech/test-clean"
-TRAIN_AUDIO_DIR = "data/LibriSpeech/train-clean-100" # Need this to get num_speakers
+TEST_AUDIO_DIR = "/Users/abhinavbhargava/Downloads/AFML_project/LibriSpeech_2"
+TRAIN_AUDIO_DIR = "/Users/abhinavbhargava/Downloads/AFML_project/LibriSpeech" # Need this to get num_speakers
 
 MESSAGE_BITS = 64
 AUDIO_CLIP_LEN_SEC = 1

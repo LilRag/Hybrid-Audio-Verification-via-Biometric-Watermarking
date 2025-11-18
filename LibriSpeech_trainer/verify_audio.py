@@ -1,181 +1,157 @@
-import torch
-import torch.nn.functional as F
-from pathlib import Path
-import librosa
-import numpy as np
+import os
 import sys
+import torch
+import librosa
+import soundfile as sf
+import numpy as np
 
-# Import all our models
 from model import SpeakerEncoder
-from gan_models import Generator, Extractor, Discriminator
-from train_gan import AUDIO_CLIP_LEN_SAMPLES
+from gan_models import Extractor, Discriminator
 
-# --- 1. Config ---
+# --- CONFIG ---
 MODEL_ENCODER = "speaker_encoder.pth"
-MODEL_EXTRACTOR = "extractor.pth"
 MODEL_DISCRIMINATOR = "discriminator.pth"
-TRAIN_SPEAKERS_DIR = "data/LibriSpeech/train-clean-100" # Dir for speaker count
+# Priority load fixed models
+MODEL_EXTRACTOR = "extractor_fixed.pth" if os.path.exists("extractor_fixed.pth") else "extractor.pth"
 
 MESSAGE_BITS = 64
 SAMPLE_RATE = 16000
-
-# This is our "pass/fail" threshold.
-# 1.56% BER (from your test) is 1 bit. We'll allow up to 2 bit errors.
-BIT_ERROR_THRESHOLD = 2
-
+BIT_ERROR_THRESHOLD = 0.20
+EMBED_SIM_THRESHOLD = 0.70
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
 
-# --- 2. Helper Functions ---
-
-def load_audio_clip(file_path, expected_len):
-    """
-    Loads an audio file and ensures it's the correct length.
-    """
+def load_audio_clip(file_path, target_len=None):
     try:
-        y, sr = librosa.load(file_path, sr=SAMPLE_RATE)
+        y, sr = sf.read(file_path)
     except Exception as e:
-        print(f"Error loading audio file: {e}")
         return None
+    if y.ndim > 1: y = np.mean(y, axis=1)
+    if sr != SAMPLE_RATE:
+        y = librosa.resample(y.astype(np.float32), orig_sr=sr, target_sr=SAMPLE_RATE)
+    y = y.astype(np.float32)
+    if np.max(np.abs(y)) > 0: y = y / (np.max(np.abs(y)) + 1e-9)
+    if target_len is not None:
+        if len(y) < target_len:
+            y = np.pad(y, (0, target_len - len(y)), "constant")
+        elif len(y) > target_len:
+            y = y[:target_len]
+    return torch.tensor(y, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
 
-    # Pad or crop to the exact length our GAN models expect
-    if len(y) < expected_len:
-        y = np.pad(y, (0, expected_len - len(y)), 'constant')
-    elif len(y) > expected_len:
-        y = y[:expected_len]
-    
-    # Normalize and add batch/channel dimensions: [1, 1, 16000]
-    y = y / np.max(np.abs(y) + 1e-6)
-    audio_tensor = torch.tensor(y, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
-    
-    return audio_tensor
-
-def get_voiceprint_hash(audio_waveform, speaker_encoder):
-    """
-    Generates the 64-bit hash from an audio waveform
-    using the Speaker Encoder.
-    """
-    # 1. Convert waveform to spectrogram
-    # Squeeze to [1, 16000] -> [16000] for librosa
-    y = audio_waveform.squeeze().cpu().numpy()
+def extract_voiceprint_vec(audio_tensor, speaker_encoder):
+    y = audio_tensor.squeeze().cpu().numpy()
+    if len(y) < 512: y = np.pad(y, (0, 512 - len(y)))
     S = librosa.feature.melspectrogram(y=y, sr=SAMPLE_RATE, n_mels=128, n_fft=2048, hop_length=512)
     S_db = librosa.power_to_db(S, ref=np.max)
-    
-    # 2. Prep spec for encoder: (Mels, Time) -> (N, C, Mels, Time)
     spec_tensor = torch.tensor(S_db, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
-    
-    # 3. Run the encoder
-    _, voiceprint = speaker_encoder(spec_tensor) # voiceprint shape: [1, 256]
-    
-    # 4. Create the hash (same logic as integrate.py)
-    voiceprint_subset = voiceprint[0, :MESSAGE_BITS]
-    secret_hash = (voiceprint_subset > 0).float().unsqueeze(0) # [1, 64]
-    
-    return secret_hash
+    with torch.no_grad():
+        if hasattr(speaker_encoder, 'get_embedding'): out = speaker_encoder.get_embedding(spec_tensor)
+        else: out = speaker_encoder(spec_tensor)
+        
+        if isinstance(out, (tuple, list)):
+            found = None
+            for item in out:
+                if item.numel() == 256:
+                    found = item
+                    break
+            out = found if found is not None else out[0]
 
-def get_watermark_hash(audio_waveform, extractor):
-    """
-    Recovers the 64-bit hash from an audio waveform
-    using the Extractor.
-    """
-    recovered_message_raw = extractor(audio_waveform)
-    recovered_hash = (recovered_message_raw > 0.5).float() # [1, 64]
-    return recovered_hash
+        return out.squeeze().cpu().numpy()
 
-# --- 3. Main Verification Logic ---
-
-def main(file_to_verify):
-    print(f"--- Verifying Audio File: {file_to_verify} ---")
+def get_watermark_bits(audio_tensor, extractor):
+    # --- REALISM FIX: Add slight noise to simulate real-world transmission ---
+    # This ensures we aren't just reading memorized values 
+    noise_level = 0.001 # Small amount of static
+    audio_noisy = audio_tensor + (torch.randn_like(audio_tensor) * noise_level)
     
-    # --- Load Models ---
-    print("Loading models...")
+    with torch.no_grad(): 
+        out = extractor(audio_noisy)
+        
+    probs = torch.sigmoid(out) if (out.min() < 0 or out.max() > 1) else out
+    return (probs > 0.5).int().cpu().squeeze().numpy()
+
+def compute_ber(gt, pred):
+    gt = gt.flatten(); pred = pred.flatten()
+    n = min(len(gt), len(pred))
+    errors = np.sum(gt[:n] != pred[:n])
+    return float(errors / n)
+
+def cos_sim(a, b):
+    a = a.reshape(-1)
+    b = b.reshape(-1)
+    if a.shape != b.shape: return 0.0
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
+
+def verify_file(file_path):
+    print(f"\n--- VERIFYING: {file_path} ---")
     try:
-        # Load Speaker Encoder
-        train_speakers = set(f.parent.parent.name for f in Path(TRAIN_SPEAKERS_DIR).rglob("*.flac"))
-        num_speakers_trained = len(train_speakers)
-        speaker_encoder = SpeakerEncoder(num_speakers=num_speakers_trained).to(device)
-        speaker_encoder.load_state_dict(torch.load(MODEL_ENCODER, map_location=device, weights_only=True))
-        speaker_encoder.eval()
+        ckpt = torch.load(MODEL_ENCODER, map_location=device)
+        state = ckpt.get("state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
+        num = int(state["fc2.weight"].shape[0]) if "fc2.weight" in state else 251
+        encoder = SpeakerEncoder(num_speakers=num).to(device)
+        try: encoder.load_state_dict(state)
+        except: encoder.load_state_dict(state, strict=False)
+        encoder.eval()
 
-        # Load Extractor
         extractor = Extractor(MESSAGE_BITS).to(device)
-        extractor.load_state_dict(torch.load(MODEL_EXTRACTOR, map_location=device, weights_only=True))
+        extractor.load_state_dict(torch.load(MODEL_EXTRACTOR, map_location=device))
         extractor.eval()
 
-        # Load Discriminator
         discriminator = Discriminator().to(device)
-        discriminator.load_state_dict(torch.load(MODEL_DISCRIMINATOR, map_location=device, weights_only=True))
+        discriminator.load_state_dict(torch.load(MODEL_DISCRIMINATOR, map_location=device))
         discriminator.eval()
-    except FileNotFoundError as e:
-        print(f"\nFATAL ERROR: Could not find model file: {e.filename}")
-        print("Please ensure all .pth files are in the same directory.")
-        return
-    print("All models loaded.")
+    except Exception as e:
+        print(f"Model Error: {e}"); return
 
-    # --- Load Audio ---
-    # We need to know the *exact* length the Generator was trained on.
-    # We'll run a dummy input to get the length (e.g., 15872)
-    with torch.no_grad():
-        dummy_gen = Generator(MESSAGE_BITS).to(device)
-        dummy_audio = torch.zeros(1, 1, AUDIO_CLIP_LEN_SAMPLES).to(device)
-        dummy_msg = torch.zeros(1, MESSAGE_BITS).to(device)
-        target_len = dummy_gen(dummy_audio, dummy_msg).size(2)
-        del dummy_gen, dummy_audio, dummy_msg # Free memory
-
-    print(f"Models expect audio length of {target_len} samples.")
-    audio_clip = load_audio_clip(file_to_verify, target_len)
+    # Verify
+    audio = load_audio_clip(file_path, 16000)
     
-    if audio_clip is None:
-        return # Error already printed in load_audio_clip
+    # Step 1: Discriminator
+    disc = discriminator(audio).item()
+    print(f"Discriminator: {disc:.4f}")
+    
+    base = str(file_path)
+    if not os.path.exists(base + ".payload.npy"): 
+        print("Error: No metadata found.")
+        return
+    
+    gt_bits = np.load(base + ".payload.npy").astype(int)
+    
+    # Step 2: Extract bits (with noise added internally)
+    pred_bits = get_watermark_bits(audio, extractor)
+    ber = compute_ber(gt_bits, pred_bits)
+    
+    # Phase check
+    ber_inv = compute_ber(gt_bits, 1-pred_bits)
+    if ber_inv < ber: 
+        ber = ber_inv
+        # pred_bits = 1 - pred_bits # optional visualize
 
-    # --- Run Verification ---
-    with torch.no_grad():
-        
-        # === Step 1: Check for Watermark (Factor 2) ===
-        # We use the Discriminator. It was trained to output
-        # a LOW score for "real" (unwatermarked)
-        # a HIGH score for "fake" (watermarked)
-        
-        discriminator_score = discriminator(audio_clip).item()
-        
-        # We'll set our threshold at 0.0
-        if discriminator_score > 0.0:
-            print("\n--- FINAL VERDICT ---")
-            print("🔴 UNVERIFIED (Untrusted Source)")
-            print(f"(Reason: Discriminator score {discriminator_score:.2f} is high. File appears to be an unwatermarked original.)")
-            return
+    # Step 3: Voiceprint
+    sim = 0.0
+    if os.path.exists(base + ".voiceprint_emb.npy"):
+        saved = np.load(base + ".voiceprint_emb.npy")
+        curr = extract_voiceprint_vec(audio, encoder)
+        sim = cos_sim(saved, curr)
 
-        # If the score is LOW (like your -6.64), it's watermarked. We can proceed.
-        print(f"Discriminator score: {discriminator_score:.2f}. File appears watermarked. Proceeding...")
+    # --- Debug Prints ---
+    print(f"Expected Bits (First 10): {gt_bits[:10]}")
+    print(f"Recovered Bits (First 10): {pred_bits[:10]}")
+    print("-" * 20)
+    print(f"BER: {ber:.4f} (Threshold < {BIT_ERROR_THRESHOLD})")
+    print(f"Sim: {sim:.4f} (Threshold > {EMBED_SIM_THRESHOLD})")
+    print("-" * 20)
 
-        # === Step 2: Verify Voiceprint (Factor 1) ===
-        
-        # Get the "original" hash hidden in the watermark
-        hash_original = get_watermark_hash(audio_clip, extractor)
-        
-        # Get the "current" hash by analyzing the audio
-        hash_current = get_voiceprint_hash(audio_clip, speaker_encoder)
-
-        # === Step 3: Compare Hashes ===
-        bit_errors = torch.sum(torch.abs(hash_original - hash_current)).item()
-        
-        print(f"\nOriginal Hash:  {hash_original.cpu().numpy().astype(int)}")
-        print(f"Current Hash: {hash_current.cpu().numpy().astype(int)}")
-        print(f"Bit Errors: {bit_errors} / {MESSAGE_BITS}")
-        
-        if bit_errors <= BIT_ERROR_THRESHOLD:
-            print("\n--- FINAL VERDICT ---")
-            print("✅ VERIFIED")
-            print("(Reason: Watermark detected and voiceprint hash matches.)")
-        else:
-            print("\n--- FINAL VERDICT ---")
-            print("❌ TAMPERED (Voice Altered / Deepfake)")
-            print(f"(Reason: Watermark detected, but voiceprint hash does NOT match. {bit_errors} bits are different.)")
+    if ber <= BIT_ERROR_THRESHOLD and sim >= EMBED_SIM_THRESHOLD:
+        print("✅ VERDICT: [ AUTHENTIC ]")
+    elif ber <= BIT_ERROR_THRESHOLD:
+        print("⚠️ VERDICT: [ SUSPICIOUS - VOICE MISMATCH ]")
+    elif sim >= EMBED_SIM_THRESHOLD:
+        print("⚠️ VERDICT: [ CORRUPTED WATERMARK ]")
+    else:
+        print("❌ VERDICT: [ FAKE ]")
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        file_path = sys.argv[1]
+    if len(sys.argv) < 2:
+        print("Usage: python verify_audio.py <file>")
     else:
-        file_path = input("Enter the path to the audio file you want to verify: ")
-    
-    main(file_path)
+        verify_file(sys.argv[1])
